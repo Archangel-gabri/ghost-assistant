@@ -1,5 +1,5 @@
-# Ghost — voice + screen assistant — ULTRA-FAST configuration
-# Optimized for speed: moonshine STT + claude haiku + streaming
+# Ghost — FAST config (recommended)
+# faster-whisper "base" (RU+EN) + claude haiku. Balanced speed/accuracy on CPU.
 
 screenshot:
   interval_ms: 500
@@ -9,23 +9,20 @@ screenshot:
 
 backend:
   provider: "claude"
-  # Fast model: haiku (instead of sonnet)
-  model: "haiku"
+  model: "sonnet"                # same speed as haiku via CLI, but smarter
   workdir: "<workdir>"
   startup_timeout: 15
-  # Shorter timeout for faster feedback
   response_timeout: 30
 
-  # STT backend selection
-  # ✓ "moonshine"       - FASTEST (2-3x faster), 75M params, 95% accuracy
-  # "distil-whisper"  - 6x faster than base, 59M params
-  # "faster-whisper"  - current standard, good balance
-  # "streaming"       - chunked streaming for progressive transcription
-  # "auto"            - auto-detect fastest available
-  stt_backend: "moonshine"
-
-  # For moonshine/distil (ignored if using faster-whisper)
-  whisper_model: "tiny"
+  # STT — "auto" uses Groq cloud (whisper-large-v3-turbo, ~0.5s) when
+  # GROQ_API_KEY is set, else falls back to local faster-whisper (~2s, offline).
+  #   backend: "auto" | "groq" | "faster-whisper" | "streaming"
+  #   model:   local only — "tiny" | "base" (default) | "small" | "large-v3"
+  #   language: "ru" forces Russian (faster + reliable); null = auto-detect
+  # Get a FREE key at https://console.groq.com then:  export GROQ_API_KEY=...
+  stt_backend: "auto"
+  whisper_model: "base"
+  language: "ru"
 
 prompt:
   template: |

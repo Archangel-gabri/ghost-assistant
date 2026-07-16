@@ -1,0 +1,43 @@
+# Ghost — tools & models registry (USER-EDITABLE)
+# ---------------------------------------------------------------------------
+# Add your own AI tools here — the UI reads this file to build the tool and
+# model dropdowns. No code changes needed for a new tool.
+#
+# Each entry:
+#   id:       short unique key
+#   label:    name shown in the UI
+#   provider: "claude" | "codex" | "generic"
+#   models:   list shown in the model dropdown
+#   command:  (generic only) shell template; {model} is substituted, the
+#             prompt is fed on stdin, and the answer is read from stdout.
+# ---------------------------------------------------------------------------
+
+tools:
+  - id: claude
+    label: "Claude Code"
+    provider: claude
+    models: [sonnet, haiku, opus, fable]
+
+  - id: codex
+    label: "Codex"
+    provider: codex
+    models: [gpt-5.6-luna, gpt-5.6-sol, o3, gpt-5.5]
+
+  # --- examples: uncomment & set API keys to enable ---
+  # - id: grok
+  #   label: "Grok"
+  #   provider: generic
+  #   command: "grok --model {model} --quiet"
+  #   models: [grok-4, grok-3-mini]
+  #
+  # - id: cursor
+  #   label: "Cursor"
+  #   provider: generic
+  #   command: "cursor-agent --model {model} -p"
+  #   models: [auto, gpt-5.5, sonnet]
+  #
+  # - id: gemini
+  #   label: "Gemini"
+  #   provider: generic
+  #   command: "gemini --model {model}"
+  #   models: [gemini-2.5-flash, gemini-2.5-pro]

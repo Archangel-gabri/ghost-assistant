@@ -56,3 +56,43 @@ def get_nested(d: dict, *keys: str, default: Any = None) -> Any:
         else:
             return default
     return d if d != {} else default
+
+
+# ---------------------------------------------------------------------------
+# Tools registry (user-editable tools.yaml drives the UI dropdowns)
+# ---------------------------------------------------------------------------
+
+_BUILTIN_TOOLS = [
+    {"id": "claude", "label": "Claude Code", "provider": "claude",
+     "models": ["sonnet", "haiku", "opus", "fable"]},
+    {"id": "codex", "label": "Codex", "provider": "codex",
+     "models": ["gpt-5.6-luna", "gpt-5.6-sol", "o3", "gpt-5.5"]},
+]
+
+
+def load_tools(path: Optional[str | Path] = None) -> list[dict]:
+    """Load the tools registry from tools.yaml (next to this file by default).
+
+    Falls back to the built-in Claude+Codex list if the file is missing or
+    malformed, so the UI always has something to show.
+    """
+    if path is None:
+        path = Path(__file__).resolve().parent / "tools.yaml"
+    try:
+        import yaml
+        with open(path) as f:
+            data = yaml.safe_load(f) or {}
+        tools = data.get("tools") or []
+        # keep only well-formed entries
+        clean = [t for t in tools if t.get("id") and t.get("models")]
+        return clean or _BUILTIN_TOOLS
+    except Exception:
+        return _BUILTIN_TOOLS
+
+
+def tool_by_id(tools: list[dict], tool_id: str) -> dict:
+    """Return the tool dict for an id (first tool if not found)."""
+    for t in tools:
+        if t.get("id") == tool_id:
+            return t
+    return tools[0] if tools else _BUILTIN_TOOLS[0]

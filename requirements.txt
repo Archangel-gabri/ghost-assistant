@@ -1,23 +1,10 @@
-# Core GUI and Audio
-PySide6>=6.5.0
-mss>=7.0.0
-Pillow>=9.0.0
-ImageHash>=4.3.0
-numpy>=1.22.0
-sounddevice>=0.4.5
-
-# Speech-to-Text
-faster-whisper>=0.10.0
-transformers>=4.30.0
-
-# LLM Integration
-torch>=2.0.0
-PyYAML>=6.0
-
-# Optional: Moonshine STT (uncomment to use)
-# (transformers и torch уже выше)
-
-# Development
-pytest>=7.0
-black>=23.0
-flake8>=6.0
+# Ghost runtime dependencies
+PySide6>=6.5        # Qt GUI (overlay, tray, SVG icons)
+mss>=7.0            # screen capture
+Pillow>=9.0         # image handling
+ImageHash>=4.3      # screenshot change-detection
+numpy>=1.22         # audio buffers
+sounddevice>=0.4.5  # microphone / loopback capture
+faster-whisper>=0.10  # local speech-to-text (offline fallback)
+PyYAML>=6.0         # config + tools registry
+# Groq cloud STT needs no package — just set GROQ_API_KEY (stdlib urllib).

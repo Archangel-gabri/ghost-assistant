@@ -1,5 +1,5 @@
 # Ghost — voice + screen assistant — ULTRA mode
-# For extreme speed: distil-whisper STT + claude haiku + minimal overhead
+# Max speed: faster-whisper "tiny" (RU+EN) + claude haiku. Lower RU accuracy.
 
 screenshot:
   interval_ms: 500
@@ -14,9 +14,10 @@ backend:
   startup_timeout: 10
   response_timeout: 15  # Ultra-aggressive timeout
 
-  # Distil-Whisper: 6x faster, good balance of speed+accuracy
-  stt_backend: "distil-whisper"
+  # tiny = fastest on CPU (weaker Russian accuracy; use "base" if it misreads)
+  stt_backend: "faster-whisper"
   whisper_model: "tiny"
+  language: "ru"
 
 prompt:
   template: |

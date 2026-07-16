@@ -1,23 +1,28 @@
 """
 stt_fast.py — Быстрая транскрибация с выбором бэкенда.
 
-Режимы (от быстрого к точному):
-  1. "moonshine"       - микро-Whisper, 2-3x быстрее, ~95% accuracy
-  2. "distil-whisper"  - дистиллированный Whisper, 6x быстрее
-  3. "faster-whisper"  - текущий стандарт (базовая версия)
-  4. "silero"          - Silero STT (если доступен)
-  5. "ollama"          - локальный LLM с речью (экспериментально)
+Бэкенды:
+  "groq"           - облако, whisper-large-v3-turbo, ~0.5с, точный RU (нужен GROQ_API_KEY)  ⭐
+  "faster-whisper" - локально, RU+EN, ~2с на CPU (offline, без ключа)
+  "streaming"      - локальный faster-whisper, chunked
+  "moonshine"      - English-only (не для русского)
+  "distil-whisper" - English-only (.en модели)
+  "auto"           - Groq если есть ключ, иначе faster-whisper
 
-Рекомендация: "moonshine" + streaming
+Рекомендация: "groq" (или "auto") + faster-whisper base как offline-фолбэк.
 """
 
 import logging
+import os
 import time
 from pathlib import Path
 from typing import Optional, Literal
 from abc import ABC, abstractmethod
 
 logger = logging.getLogger("stt_fast")
+
+GROQ_URL = "https://api.groq.com/openai/v1/audio/transcriptions"
+GROQ_MODEL = "whisper-large-v3-turbo"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -36,6 +41,72 @@ class STTBackend(ABC):
     def is_available(self) -> bool:
         """Check if backend is installed/available."""
         pass
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 0. Groq cloud STT — whisper-large-v3-turbo (FASTEST, needs GROQ_API_KEY) ⭐
+# ─────────────────────────────────────────────────────────────────────────────
+
+class GroqSTT(STTBackend):
+    """Groq cloud transcription. ~0.5s, accurate Russian. Zero extra deps
+    (uses stdlib urllib for a multipart POST). Needs GROQ_API_KEY env var —
+    free key at https://console.groq.com."""
+
+    def __init__(self, model_size: Optional[str] = None, model: str = GROQ_MODEL):
+        self.model = model
+        self._key = os.environ.get("GROQ_API_KEY", "")
+
+    def is_available(self) -> bool:
+        return bool(os.environ.get("GROQ_API_KEY"))
+
+    def transcribe(self, wav_path: str, language: Optional[str] = "ru") -> str:
+        import urllib.request
+        import json
+        import uuid
+
+        key = os.environ.get("GROQ_API_KEY", self._key)
+        if not key:
+            raise RuntimeError("GROQ_API_KEY not set")
+
+        with open(wav_path, "rb") as f:
+            audio = f.read()
+
+        # multipart/form-data body (stdlib, no requests dependency)
+        boundary = f"----ghost{uuid.uuid4().hex}"
+        parts = []
+
+        def field(name, value):
+            parts.append(f"--{boundary}\r\n".encode())
+            parts.append(f'Content-Disposition: form-data; name="{name}"\r\n\r\n'.encode())
+            parts.append(f"{value}\r\n".encode())
+
+        field("model", self.model)
+        field("response_format", "json")
+        field("temperature", "0")
+        if language:
+            field("language", language)
+        parts.append(f"--{boundary}\r\n".encode())
+        parts.append(
+            b'Content-Disposition: form-data; name="file"; filename="audio.wav"\r\n'
+            b"Content-Type: audio/wav\r\n\r\n"
+        )
+        parts.append(audio)
+        parts.append(f"\r\n--{boundary}--\r\n".encode())
+        body = b"".join(parts)
+
+        req = urllib.request.Request(
+            GROQ_URL, data=body, method="POST",
+            headers={
+                "Authorization": f"Bearer {key}",
+                "Content-Type": f"multipart/form-data; boundary={boundary}",
+            },
+        )
+        start = time.time()
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            data = json.loads(resp.read().decode())
+        text = (data.get("text") or "").strip()
+        logger.info(f"Groq [{self.model}] ({time.time()-start:.2f}s): «{text}»")
+        return text
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -176,15 +247,19 @@ class FasterWhisperSTT(STTBackend):
     def transcribe(self, wav_path: str, language: Optional[str] = None) -> str:
         self._load()
         start = time.time()
-        segments, _ = self._model.transcribe(
+        segments, info = self._model.transcribe(
             wav_path,
             beam_size=1,
-            language=language,
+            language=language,               # None = auto-detect (slower)
             without_timestamps=True,
+            condition_on_previous_text=False,  # each question is independent
+            vad_filter=True,                 # trim leading/trailing silence
+            vad_parameters={"min_silence_duration_ms": 300},
         )
-        text = " ".join(seg.text.strip() for seg in segments)
+        text = " ".join(seg.text.strip() for seg in segments).strip()
         elapsed = time.time() - start
-        logger.info(f"Faster-Whisper ({elapsed:.2f}s): «{text}»")
+        lang = getattr(info, "language", language)
+        logger.info(f"Faster-Whisper [{lang}] ({elapsed:.2f}s): «{text}»")
         return text
 
 
@@ -290,21 +365,21 @@ def create_stt(backend: str = "auto", **kwargs) -> STTBackend:
         stt = create_stt("auto")  # auto-select fastest available
     """
     backends = {
-        "moonshine": MoonshineSTT,
-        "distil-whisper": DistilWhisperSTT,
-        "faster-whisper": FasterWhisperSTT,
-        "streaming": StreamingWhisperSTT,
+        "groq": GroqSTT,                     # cloud, fastest (needs GROQ_API_KEY)
+        "moonshine": MoonshineSTT,           # English-only
+        "distil-whisper": DistilWhisperSTT,  # English-only (.en models)
+        "faster-whisper": FasterWhisperSTT,  # multilingual (RU+EN) — local default
+        "streaming": StreamingWhisperSTT,    # multilingual, chunked
     }
 
     if backend == "auto":
-        # Auto-detect: moonshine > distil > faster
-        for name in ["moonshine", "distil-whisper", "faster-whisper"]:
-            backend_cls = backends[name]
-            if backend_cls().is_available():
-                logger.info(f"Auto-selected STT: {name}")
-                return backend_cls(**kwargs)
-        # Fallback to faster-whisper
-        logger.warning("No fast STT available, using faster-whisper")
+        # Prefer Groq cloud (fastest) if a key is present; else local
+        # multilingual faster-whisper. moonshine/distil are English-only
+        # and never auto-selected.
+        if GroqSTT().is_available():
+            logger.info("Auto-selected STT: groq (cloud, whisper-large-v3-turbo)")
+            return GroqSTT()
+        logger.info("Auto-selected STT: faster-whisper (local, no GROQ_API_KEY)")
         return FasterWhisperSTT(**kwargs)
 
     if backend not in backends:
@@ -312,8 +387,18 @@ def create_stt(backend: str = "auto", **kwargs) -> STTBackend:
 
     backend_cls = backends[backend]
     if not backend_cls().is_available():
-        raise ImportError(f"{backend} not available. Install: pip install transformers faster-whisper")
+        # Graceful degradation: cloud backend requested but unavailable → run
+        # local instead of crashing (app keeps working; upgrades when key set).
+        if backend == "groq":
+            logger.warning("groq requested but GROQ_API_KEY missing → faster-whisper (local)")
+            return FasterWhisperSTT(**kwargs)
+        raise ImportError(
+            f"{backend} not available. faster-whisper: pip install faster-whisper | "
+            f"moonshine/distil-whisper: pip install transformers torch (English-only)"
+        )
 
+    if backend == "groq":
+        return GroqSTT()
     return backend_cls(**kwargs)
 
 

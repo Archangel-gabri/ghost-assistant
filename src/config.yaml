@@ -20,6 +20,11 @@ backend:
   # Codex: gpt-5.6-luna (fastest), gpt-5.6-sol, o3, gpt-5.5
   model: "sonnet"
 
+  # STT (multilingual). See config-fast.yaml for details.
+  stt_backend: "faster-whisper"
+  whisper_model: "base"     # tiny/base/small/large-v3
+  language: "ru"            # null = auto-detect (slower)
+
 prompt:
   template: |
     Answer the following spoken question shortly and accurately.

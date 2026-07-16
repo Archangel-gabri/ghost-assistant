@@ -211,16 +211,19 @@ class AudioCapture:
                  on_question: Callable[[str], None],
                  device_name: Optional[str] = None,
                  prefer_silero: bool = False,
-                 whisper_model: str = "tiny",
-                 stt_backend: str = "auto",
+                 whisper_model: str = "base",
+                 stt_backend: str = "faster-whisper",
+                 language: Optional[str] = "ru",
                  output_dir: Optional[str] = None):
         """
         Args:
             on_question: callback(text) when a question is transcribed.
             device_name: PulseAudio source name or index. None → auto-detect monitor.
             prefer_silero: try loading Silero VAD before falling back to energy.
-            whisper_model: "tiny", "base", "small", etc. (for older backends).
-            stt_backend: "auto", "moonshine", "distil-whisper", "faster-whisper", "streaming".
+            whisper_model: "tiny", "base", "small", "large-v3" (faster-whisper size).
+            stt_backend: "faster-whisper" (RU+EN), "streaming", "auto".
+                         NOTE: "moonshine"/"distil-whisper" are English-only.
+            language: force STT language ("ru", "en", ...); None = auto-detect (slower).
             output_dir: where to save temp_question.wav (default: cwd).
         """
         self._callback = on_question
@@ -230,6 +233,7 @@ class AudioCapture:
         self._stt = None  # lazy load via stt_fast
         self._stt_backend = stt_backend
         self._whisper_model = whisper_model
+        self._language = language
 
         # state
         self._stream: Optional[sd.InputStream] = None
@@ -539,7 +543,7 @@ class AudioCapture:
             if self._stt is None:
                 from stt_fast import create_stt
                 self._stt = create_stt(self._stt_backend, model_size=self._whisper_model)
-            text = self._stt.transcribe(str(wav_path))
+            text = self._stt.transcribe(str(wav_path), language=self._language)
             if text:
                 self._callback(text)
         except ImportError as e:

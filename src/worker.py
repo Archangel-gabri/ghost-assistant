@@ -71,15 +71,29 @@ class PipelineWorker(QThread):
             workdir=str(workdir),
             startup_timeout=be_cfg.get("startup_timeout", 15),
             response_timeout=timeout,
+            command=be_cfg.get("command"),
         )
         ok = self._session.start()
         label = f"{provider}/{model}" if ok else f"{provider}/mock"
         self.status_changed.emit(f"listening ({label})")
 
+        # Pre-warm the LLM CLI in the background so the FIRST real question
+        # doesn't eat the cold-start latency (~5-7s → hidden at startup).
+        if ok:
+            def _warm():
+                try:
+                    self._session.ask("привет")
+                    logger.info("LLM pre-warmed")
+                except Exception as e:
+                    logger.debug(f"LLM warmup skipped: {e}")
+            threading.Thread(target=_warm, daemon=True, name="llm-warmup").start()
+
         # audio capture — calls on_question from its internal thread
         self._audio = AudioCapture(
             on_question=self._on_question,
-            whisper_model="base",
+            whisper_model=be_cfg.get("whisper_model", "base"),
+            stt_backend=be_cfg.get("stt_backend", "faster-whisper"),
+            language=be_cfg.get("language", "ru"),
             output_dir=str(PROJECT_ROOT),
         )
 
