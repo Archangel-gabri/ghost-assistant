@@ -1,0 +1,80 @@
+[build-system]
+requires = ["setuptools>=65.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ghost-assistant"
+version = "2.0.0"
+description = "🚀 Super-fast session assistant with AI speech recognition and response generation"
+readme = "README.md"
+license = {text = "MIT"}
+authors = [
+    {name = "Danya Kubrak", email = "archangel-gabri@users.noreply.github.com"}
+]
+requires-python = ">=3.10"
+
+dependencies = [
+    "PySide6>=6.5.0",
+    "mss>=7.0.0",
+    "Pillow>=9.0.0",
+    "ImageHash>=4.3.0",
+    "numpy>=1.22.0",
+    "sounddevice>=0.4.5",
+    "faster-whisper>=0.10.0",
+    "PyYAML>=6.0",
+    "transformers>=4.30.0",
+    "torch>=2.0.0",
+]
+
+optional-dependencies = {
+    "moonshine" = ["transformers>=4.30.0", "torch>=2.0.0"],
+    "dev" = [
+        "pytest>=7.0",
+        "black>=23.0",
+        "flake8>=6.0",
+        "mypy>=1.0",
+    ],
+}
+
+keywords = ["ai", "session", "speech-recognition", "claude", "transcription"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Operating System :: Linux",
+    "Topic :: Multimedia :: Sound/Audio :: Speech",
+]
+
+[project.urls]
+Homepage = "https://github.com/yourusername/ghost-assistant"
+Documentation = "https://github.com/yourusername/ghost-assistant/wiki"
+Repository = "https://github.com/yourusername/ghost-assistant.git"
+Issues = "https://github.com/yourusername/ghost-assistant/issues"
+
+[project.scripts]
+ghost = "ghost.__main__:main"
+ghost-cli = "ghost.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages]
+find = {where = ["src"]}
+
+[tool.black]
+line-length = 100
+target-version = ["py310", "py311", "py312"]
+
+[tool.mypy]
+python_version = "3.10"
+ignore_missing_imports = true
+disallow_untyped_defs = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = "test_*.py"
+addopts = "-v --tb=short"

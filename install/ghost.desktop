@@ -1,0 +1,17 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Ghost — voice + screen assistant
+Comment=Super-fast AI session helper with speech recognition
+Icon=ghost
+Exec=ghost --config config-fast.yaml
+Terminal=false
+Categories=Utility;Office;
+StartupNotify=true
+X-GNOME-Autostart-enabled=false
+
+# Qt/KDE specific
+X-KDE-Protocols=
+
+# Theming
+X-GNOME-SingleWindow=true

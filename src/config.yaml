@@ -1,0 +1,35 @@
+# Ghost — voice + screen assistant — configuration
+# paths are relative to project root
+
+screenshot:
+  interval_ms: 500
+  path: "temp_screen.png"
+  hash_threshold: 5
+  monitor: 0
+
+# LLM backend selection
+backend:
+  # "claude" or "codex"
+  provider: "claude"
+  # Workdir for CLI context (where your project lives)
+  workdir: "<workdir>"
+  startup_timeout: 15
+  response_timeout: 60
+
+  # Claude: sonnet (fast+good), haiku (fastest), fable, opus
+  # Codex: gpt-5.6-luna (fastest), gpt-5.6-sol, o3, gpt-5.5
+  model: "sonnet"
+
+prompt:
+  template: |
+    Answer the following spoken question shortly and accurately.
+    Language: Russian (ответь на русском).
+    Keep it 1-2 sentences. Refer to project architecture or code visible in the attached screenshot: {screenshot_path}
+
+    Question: {question}
+
+overlay:
+  enabled: true
+  opacity: 0.8
+  position: "bottom-center"
+  auto_fade_seconds: 15

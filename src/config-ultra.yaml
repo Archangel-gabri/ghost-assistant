@@ -1,0 +1,31 @@
+# Ghost — voice + screen assistant — ULTRA mode
+# For extreme speed: distil-whisper STT + claude haiku + minimal overhead
+
+screenshot:
+  interval_ms: 500
+  path: "temp_screen.png"
+  hash_threshold: 8  # Higher threshold = skip more frames
+  monitor: 0
+
+backend:
+  provider: "claude"
+  model: "haiku"  # Fastest Claude model
+  workdir: "<workdir>"
+  startup_timeout: 10
+  response_timeout: 15  # Ultra-aggressive timeout
+
+  # Distil-Whisper: 6x faster, good balance of speed+accuracy
+  stt_backend: "distil-whisper"
+  whisper_model: "tiny"
+
+prompt:
+  template: |
+    Answer briefly in Russian. 1 sentence max.
+    Screenshot: {screenshot_path}
+    Q: {question}
+
+overlay:
+  enabled: true
+  opacity: 0.8
+  position: "bottom-center"
+  auto_fade_seconds: 10
