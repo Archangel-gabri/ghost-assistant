@@ -77,6 +77,16 @@ docs/         architecture notes
 tests/        tests
 ```
 
+**The line that matters is the thread boundary.** Qt repaints on one thread, and everything slow
+lives on another: `worker.py` is a `QThread` that owns the whole audio → STT → LLM chain, and it
+talks to the overlay only through signals. Nothing in `audio_capture`, `stt_fast` or `orchestrator`
+touches a widget — that is why a two-second transcription or a stalled model does not freeze the
+window it is typing into.
+
+`orchestrator.py` holds one adapter per CLI tool and streams stdout token by token, so text appears
+while it is being generated rather than after. Adding a tool means adding an entry to
+`src/tools.yaml`, not writing code.
+
 ## Docs
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — how the pieces fit together.
 - [CONTRIBUTING.md](CONTRIBUTING.md) — dev setup.
