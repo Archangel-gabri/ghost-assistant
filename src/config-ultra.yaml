@@ -10,7 +10,10 @@ screenshot:
 backend:
   provider: "claude"
   model: "haiku"  # Fastest Claude model
-  workdir: "<workdir>"
+  # Каталог, в котором запускается CLI-инструмент: от него он видит файлы и
+  # относительные пути. Пусто — берётся корень проекта. Впишите свой, если
+  # спрашиваете про конкретный репозиторий.
+  workdir: ""
   startup_timeout: 10
   response_timeout: 15  # Ultra-aggressive timeout
 

@@ -12,7 +12,10 @@ backend:
   # "claude" or "codex"
   provider: "claude"
   # Workdir for CLI context (where your project lives)
-  workdir: "<workdir>"
+  # Каталог, в котором запускается CLI-инструмент: от него он видит файлы и
+  # относительные пути. Пусто — берётся корень проекта. Впишите свой, если
+  # спрашиваете про конкретный репозиторий.
+  workdir: ""
   startup_timeout: 15
   response_timeout: 60
 
