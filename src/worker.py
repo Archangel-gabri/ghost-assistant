@@ -6,12 +6,10 @@ Emits Qt signals for the main thread to handle UI updates.
 
 import logging
 import threading
-import time
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Optional
 
-from PySide6.QtCore import QThread, Signal, Slot
+from PySide6.QtCore import QThread, Signal
 
 from audio_capture import AudioCapture
 from screen_monitor import ScreenGrabber

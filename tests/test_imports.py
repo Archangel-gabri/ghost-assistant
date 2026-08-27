@@ -1,6 +1,5 @@
 """Smoke tests: modules import and core factories behave."""
 
-import os
 import sys
 from pathlib import Path
 
@@ -9,7 +8,9 @@ sys.path.insert(0, str(SRC))
 
 
 def test_core_modules_import():
-    import utils, orchestrator, stt_fast, screen_monitor, config_helper  # noqa: F401
+    import orchestrator
+    import stt_fast
+    import config_helper  # noqa: F401
     assert hasattr(orchestrator, "LLMSession")
     assert hasattr(stt_fast, "create_stt")
 

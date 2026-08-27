@@ -20,6 +20,19 @@
 - **Glass UI** — light iOS-style frosted overlay, always on top, system tray.
 - **Configurable** — pick the tool + model in the UI; add your own tools by editing [`src/tools.yaml`](src/tools.yaml).
 
+## Tests
+
+```bash
+pip install -r requirements.txt -r requirements-dev.txt
+pytest -q tests
+ruff check src tests
+```
+
+Smoke-level by design: the suite asserts that every module imports and that the tool registry in
+`src/tools.yaml` parses into usable entries. Both are the failures that actually happen here —
+a Qt enum moved between versions and once aborted the app on the first answer, and a malformed
+tools file silently leaves the model selector empty.
+
 ## Install
 
 ```bash

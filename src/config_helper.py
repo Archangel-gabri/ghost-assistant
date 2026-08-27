@@ -1,7 +1,6 @@
 """Config initialization helper — removes duplication in main.py."""
 
 from pathlib import Path
-from typing import Optional
 from audio_capture import AudioCapture
 from screen_monitor import ScreenGrabber
 from orchestrator import LLMSession

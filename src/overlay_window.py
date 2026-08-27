@@ -15,19 +15,20 @@ from typing import Optional
 
 from PySide6.QtCore import Qt, QSize
 from PySide6.QtGui import (
-    QIcon, QPainter, QColor, QPen, QLinearGradient, QBrush, QTextCursor,
+    QPainter, QColor, QPen, QLinearGradient, QBrush, QTextCursor,
     QTextCharFormat,
 )
-
-_CURSOR_END = QTextCursor.MoveOperation.End
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QApplication,
-    QPushButton, QLabel, QTextEdit, QComboBox, QCheckBox,
-    QFileDialog, QFrame,
+    QPushButton, QLabel, QTextEdit, QComboBox, QFileDialog,
 )
 
-from utils import load_tools, tool_by_id
+from utils import load_tools
 from icons import icon
+
+# В Qt6 перечисление переехало внутрь QTextCursor.MoveOperation. Держим ссылку
+# одной константой: обращение по старому пути роняло приложение на первом ответе.
+_CURSOR_END = QTextCursor.MoveOperation.End
 
 logger = logging.getLogger("overlay")
 PROJECT_ROOT = Path(__file__).resolve().parent
@@ -467,10 +468,14 @@ class OverlayWindow(QWidget):
         r = self.rect()
         x, y, w, h = pos.x(), pos.y(), r.width(), r.height()
         edge = ""
-        if y < EDGE_DETECT_MARGIN: edge += "n"
-        if y > h - EDGE_DETECT_MARGIN: edge += "s"
-        if x < EDGE_DETECT_MARGIN: edge += "w"
-        if x > w - EDGE_DETECT_MARGIN: edge += "e"
+        if y < EDGE_DETECT_MARGIN:
+            edge += "n"
+        if y > h - EDGE_DETECT_MARGIN:
+            edge += "s"
+        if x < EDGE_DETECT_MARGIN:
+            edge += "w"
+        if x > w - EDGE_DETECT_MARGIN:
+            edge += "e"
         return edge or None
 
     def mousePressEvent(self, e):
@@ -487,12 +492,18 @@ class OverlayWindow(QWidget):
             delta = new_pos - self._drag_pos
             g = self.geometry()
             edge = self._resize_edge
-            if 'n' in edge: g.setTop(g.top() + delta.y())
-            if 's' in edge: g.setBottom(g.bottom() + delta.y())
-            if 'w' in edge: g.setLeft(g.left() + delta.x())
-            if 'e' in edge: g.setRight(g.right() + delta.x())
-            if g.width() < WIN_MIN_WIDTH: g.setWidth(WIN_MIN_WIDTH)
-            if g.height() < WIN_MIN_HEIGHT: g.setHeight(WIN_MIN_HEIGHT)
+            if 'n' in edge:
+                g.setTop(g.top() + delta.y())
+            if 's' in edge:
+                g.setBottom(g.bottom() + delta.y())
+            if 'w' in edge:
+                g.setLeft(g.left() + delta.x())
+            if 'e' in edge:
+                g.setRight(g.right() + delta.x())
+            if g.width() < WIN_MIN_WIDTH:
+                g.setWidth(WIN_MIN_WIDTH)
+            if g.height() < WIN_MIN_HEIGHT:
+                g.setHeight(WIN_MIN_HEIGHT)
             self.setGeometry(g)
             self._drag_pos = new_pos
         elif self._drag_pos is not None and e.buttons() & Qt.LeftButton:

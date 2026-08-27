@@ -16,8 +16,9 @@ import logging
 import os
 import time
 from pathlib import Path
-from typing import Optional, Literal
+from typing import Optional
 from abc import ABC, abstractmethod
+import importlib.util
 
 logger = logging.getLogger("stt_fast")
 
@@ -120,11 +121,9 @@ class MoonshineSTT(STTBackend):
         self._model = None
 
     def is_available(self) -> bool:
-        try:
-            import transformers
-            return True
-        except ImportError:
-            return False
+        # Проверяем наличие пакета, а не импортируем его: импорт transformers
+        # стоит секунды и тянет torch, а здесь нужен только ответ «есть/нет».
+        return importlib.util.find_spec("transformers") is not None
 
     def _load(self):
         if self._model is not None:
@@ -159,11 +158,9 @@ class DistilWhisperSTT(STTBackend):
         self._model = None
 
     def is_available(self) -> bool:
-        try:
-            import transformers
-            return True
-        except ImportError:
-            return False
+        # Проверяем наличие пакета, а не импортируем его: импорт transformers
+        # стоит секунды и тянет torch, а здесь нужен только ответ «есть/нет».
+        return importlib.util.find_spec("transformers") is not None
 
     def _load(self):
         if self._model is not None:
@@ -187,7 +184,9 @@ class DistilWhisperSTT(STTBackend):
         try:
             import torch
             return 0 if torch.cuda.is_available() else -1
-        except:
+        except Exception:
+            # torch может не стоять, а может стоять и падать на сломанном CUDA —
+            # для нас оба случая означают одно: считаем на процессоре.
             return -1
 
     def transcribe(self, wav_path: str, language: Optional[str] = None) -> str:
@@ -212,11 +211,7 @@ class FasterWhisperSTT(STTBackend):
         self._model = None
 
     def is_available(self) -> bool:
-        try:
-            from faster_whisper import WhisperModel
-            return True
-        except ImportError:
-            return False
+        return importlib.util.find_spec("faster_whisper") is not None
 
     def _load(self):
         if self._model is not None:
@@ -241,7 +236,7 @@ class FasterWhisperSTT(STTBackend):
         try:
             import torch
             return "cuda" if torch.cuda.is_available() else "cpu"
-        except:
+        except Exception:
             return "cpu"
 
     def transcribe(self, wav_path: str, language: Optional[str] = None) -> str:
@@ -275,11 +270,7 @@ class StreamingWhisperSTT(STTBackend):
         self._model = None
 
     def is_available(self) -> bool:
-        try:
-            from faster_whisper import WhisperModel
-            return True
-        except ImportError:
-            return False
+        return importlib.util.find_spec("faster_whisper") is not None
 
     def _load(self):
         if self._model is not None:
@@ -304,7 +295,7 @@ class StreamingWhisperSTT(STTBackend):
         try:
             import torch
             return torch.cuda.is_available()
-        except:
+        except Exception:
             return False
 
     def transcribe(self, wav_path: str, language: Optional[str] = None) -> str:

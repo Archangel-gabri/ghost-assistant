@@ -17,10 +17,7 @@ Dependencies:
 
 import collections
 import logging
-import os
-import queue
 import subprocess
-import tempfile
 import threading
 import time
 import wave
@@ -496,7 +493,6 @@ class AudioCapture:
         logger.info(f"parec started on source: {source_name}")
 
         bytes_per_block = BLOCK_SIZE * 4  # s16le stereo = 4 bytes/frame
-        bufsize = bytes_per_block * 4     # buffer 4 blocks
 
         def _read_loop():
             while self._running and self._parec_proc.poll() is None:

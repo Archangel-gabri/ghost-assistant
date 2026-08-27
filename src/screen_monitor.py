@@ -3,8 +3,6 @@ screen_monitor.py — screen capture with change detection.
 Grabs primary monitor, saves PNG, skips identical frames via perceptual hash.
 """
 
-import hashlib
-import time
 from pathlib import Path
 from typing import Optional
 

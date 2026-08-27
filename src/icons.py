@@ -4,7 +4,7 @@ SVG so there are no external assets and the color/size match the glass theme.
 """
 
 from functools import lru_cache
-from PySide6.QtCore import QByteArray, Qt, QSize
+from PySide6.QtCore import QByteArray, Qt
 from PySide6.QtGui import QIcon, QPixmap, QPainter
 from PySide6.QtSvg import QSvgRenderer
 

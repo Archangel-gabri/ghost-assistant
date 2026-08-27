@@ -12,7 +12,7 @@ import subprocess
 import time
 from pathlib import Path
 from typing import Optional, Callable
-from utils import strip_ansi, Provider
+from utils import strip_ansi
 
 logger = logging.getLogger("orchestrator")
 

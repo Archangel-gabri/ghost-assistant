@@ -17,7 +17,6 @@ from pathlib import Path
 
 import yaml
 from PySide6.QtWidgets import QApplication
-from PySide6.QtCore import Qt
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 
