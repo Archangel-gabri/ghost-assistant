@@ -16,18 +16,25 @@ Dependencies:
 """
 
 import collections
+import importlib
 import logging
 import subprocess
 import threading
 import time
 import wave
 from pathlib import Path
+from types import ModuleType
 from typing import Callable, Optional
 
 import numpy as np
-import sounddevice as sd
 
 logger = logging.getLogger("audio_capture")
+
+
+def _load_sounddevice() -> ModuleType:
+    """Load the native audio backend only when an audio path needs it."""
+    return importlib.import_module("sounddevice")
+
 
 # ---------------------------------------------------------------------------
 # constants
@@ -233,7 +240,7 @@ class AudioCapture:
         self._language = language
 
         # state
-        self._stream: Optional[sd.InputStream] = None
+        self._stream: Optional[object] = None
         self._parec_proc: Optional[subprocess.Popen] = None
         self._parec_thread: Optional[threading.Thread] = None
         self._backend: Optional[str] = None   # "sounddevice" or "parec"
@@ -254,6 +261,7 @@ class AudioCapture:
         """Start capturing. Auto-selects sounddevice or parec backend. Returns True on success."""
         resolved = self._resolve_source()
         if resolved is None:
+            sd = _load_sounddevice()
             logger.error("No loopback audio source found")
             logger.error("SoundDevice devices:")
             for d in sd.query_devices():
@@ -268,6 +276,7 @@ class AudioCapture:
         self._running = True
 
         if backend == "sounddevice":
+            sd = _load_sounddevice()
             dev_idx = source_id
             logger.info(f"Backend: sounddevice | Device [{dev_idx}]: "
                         f"{sd.query_devices()[dev_idx]['name']}")
@@ -330,6 +339,8 @@ class AudioCapture:
         backend_type: "sounddevice" or "parec"
         source_id:   int device index for sounddevice, str source name for parec
         """
+        sd = _load_sounddevice()
+
         # -- explicit device requested --
         if self._device_name:
             # try sounddevice by name substring or index
@@ -568,6 +579,7 @@ class AudioCapture:
 
 def list_devices() -> None:
     """Print all input audio devices (sounddevice + PulseAudio monitor sources)."""
+    sd = _load_sounddevice()
     print("SoundDevice input devices:")
     for d in sd.query_devices():
         if d['max_input_channels'] > 0:
