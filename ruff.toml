@@ -1,0 +1,3 @@
+# Keep the lint baseline explicit when Ruff changes defaults between releases.
+[lint]
+select = ["E4", "E7", "E9", "F"]
