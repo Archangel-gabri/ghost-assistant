@@ -13,7 +13,7 @@ from pathlib import Path
 from collections import deque
 from typing import Optional
 
-from PySide6.QtCore import Qt, QSize
+from PySide6.QtCore import QObject, Qt, QSize, Slot
 from PySide6.QtGui import (
     QPainter, QColor, QPen, QLinearGradient, QBrush, QTextCursor,
     QTextCharFormat,
@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
 
 from utils import load_tools
 from icons import icon
+from cli_contract import CLIContractError, codex_isolation_args
 
 # В Qt6 перечисление переехало внутрь QTextCursor.MoveOperation. Держим ссылку
 # одной константой: обращение по старому пути роняло приложение на первом ответе.
@@ -60,6 +61,46 @@ FONT = ('font-family: "SF Pro Display", "SF Pro Text", -apple-system, '
         '"Inter", "Segoe UI", sans-serif;')
 
 
+class _WorkerRelay(QObject):
+    """Receive queued signals on the GUI thread for exactly one worker run."""
+
+    def __init__(self, window, worker, generation):
+        super().__init__(window)
+        self._window = window
+        self._worker = worker
+        self._generation = generation
+
+    def _dispatch(self, handler, text):
+        window = self._window
+        if window._worker is self._worker and window._generation == self._generation:
+            handler(text)
+
+    @Slot(str)
+    def question(self, text):
+        self._dispatch(self._window._on_question, text)
+
+    @Slot(str)
+    def chunk(self, text):
+        self._dispatch(self._window._on_answer_chunk, text)
+
+    @Slot(str)
+    def answer(self, text):
+        self._dispatch(self._window._on_answer, text)
+
+    @Slot(str)
+    def status(self, text):
+        self._dispatch(self._window._on_status, text)
+
+    @Slot(str)
+    def error(self, text):
+        self._dispatch(self._window._on_error, text)
+
+    @Slot()
+    def finished(self):
+        # Stop invalidates the generation before this final cleanup notification.
+        self._window._on_worker_finished(self._worker)
+
+
 class OverlayWindow(QWidget):
     """Frosted-glass bottom bar."""
 
@@ -67,12 +108,19 @@ class OverlayWindow(QWidget):
         super().__init__(parent)
         self._cfg = config or {}
         self._worker = None
+        self._worker_relay = None
+        self._generation = 0
+        self._stopping = False
+        self._cleanup_failed = False
         self._history = deque(maxlen=6)
         self._tray = None
         self._quit_close = False
         self._has_content = False
         self._got_chunks = False
-        self._tools = load_tools()
+        self._answer_start = None
+        self._answer_pending = False
+        self._tools = [dict(tool, models=list(tool.get("models", []))) for tool in load_tools()]
+        self._initial_tool_index = self._restore_backend_selection()
 
         self.setWindowTitle("Ghost")
         self.setWindowFlags(
@@ -127,6 +175,7 @@ class OverlayWindow(QWidget):
         # tool selector (data-driven)
         self._tool = QComboBox()
         self._tool.addItems([t["label"] for t in self._tools])
+        self._tool.setCurrentIndex(self._initial_tool_index)
         self._tool.setStyleSheet(self._combo_style())
         self._tool.currentIndexChanged.connect(self._on_tool_changed)
         top.addWidget(self._tool)
@@ -137,12 +186,15 @@ class OverlayWindow(QWidget):
         self._model.setStyleSheet(self._combo_style())
         top.addWidget(self._model)
         self._refresh_models()
+        configured_model = self._cfg.get("backend", {}).get("model")
+        if isinstance(configured_model, str) and configured_model:
+            self._model.setCurrentText(configured_model)
 
         # screenshot toggle (pill)
         self._scr = QPushButton()
         self._scr.setCheckable(True)
-        self._scr.setChecked(True)
-        self._scr.setIcon(icon("camera", ACCENT, 18))
+        self._scr.setChecked(self._cfg.get("screenshot", {}).get("enabled", True))
+        self._scr.setIcon(icon("camera", ACCENT if self._scr.isChecked() else "#8e8e93", 18))
         self._scr.setIconSize(QSize(18, 18))
         self._scr.setToolTip("Захват экрана для вопросов по коду")
         self._scr.setStyleSheet(self._toggle_style())
@@ -285,6 +337,37 @@ class OverlayWindow(QWidget):
 
     # ── data-driven tool/model ──
 
+    def _restore_backend_selection(self) -> int:
+        """Retain an explicit backend even if it is absent from tools.yaml."""
+        backend = self._cfg.get("backend", {})
+        provider = backend.get("provider", "claude")
+        model = backend.get("model")
+        for index, tool in enumerate(self._tools):
+            if tool.get("provider") != provider:
+                continue
+            if provider == "codex" and tool.get("codex_provider_spec") != backend.get("codex_provider_spec"):
+                continue
+            if provider == "generic" and tool.get("command") != backend.get("command"):
+                continue
+            if provider == "codex":
+                # Python equality considers 1 == True. Keep the original
+                # metadata so strict preflight still rejects an invalid type.
+                tool["codex_provider_spec"] = backend.get("codex_provider_spec")
+            if isinstance(model, str) and model and model not in tool["models"]:
+                tool["models"].append(model)
+            return index
+        # A transient entry preserves the configured metadata in memory; it
+        # does not migrate config or make a different provider the fallback.
+        self._tools.append({
+            "id": "__configured_backend__",
+            "label": "Codex (configured)" if provider == "codex" else "Configured backend",
+            "provider": provider,
+            "models": [model if isinstance(model, str) and model else ("sonnet" if provider == "claude" else "")],
+            "command": backend.get("command"),
+            "codex_provider_spec": backend.get("codex_provider_spec"),
+        })
+        return len(self._tools) - 1
+
     def _current_tool(self) -> dict:
         idx = self._tool.currentIndex()
         return self._tools[idx] if 0 <= idx < len(self._tools) else self._tools[0]
@@ -327,15 +410,22 @@ class OverlayWindow(QWidget):
 
     def _quit(self):
         self._quit_close = True
-        if self._worker:
-            self._worker.stop()
+        self._on_stop()
+        if self._worker is None:
+            self._finish_close()
+
+    def _finish_close(self):
         if self._tray:
             self._tray.dispose()
+            self._tray = None
         self.close()
 
     def closeEvent(self, e):
         if self._quit_close:
-            e.accept()
+            if self._worker is None:
+                e.accept()
+            else:
+                e.ignore()
             return
         self.hide()
         e.ignore()
@@ -343,40 +433,79 @@ class OverlayWindow(QWidget):
     # ── start / stop ──
 
     def _on_start(self):
-        from worker import PipelineWorker
-        self._start.setEnabled(False)
-
+        if self._worker is not None or self._quit_close:
+            return
         tool = self._current_tool()
         model = self._model.currentText()
         be = self._cfg.setdefault("backend", {})
+        if tool.get("provider") == "codex":
+            try:
+                codex_isolation_args(Path(be.get("workdir") or PROJECT_ROOT), tool.get("codex_provider_spec"))
+            except CLIContractError as error:
+                self._on_error(f"{error.code}: {error}")
+                return
+        from worker import PipelineWorker
+        self._start.setEnabled(False)
+
         be["provider"] = tool.get("provider", "claude")
         be["model"] = model
         be["command"] = tool.get("command")
+        be["codex_provider_spec"] = tool.get("codex_provider_spec")
         self._cfg.setdefault("screenshot", {})["enabled"] = self._scr.isChecked()
 
         self._status_lbl.setText(f"○ Запуск {tool['label']} · {model}…")
 
+        self._generation += 1
+        self._stopping = False
         self._worker = PipelineWorker(self._cfg)
-        self._worker.question_detected.connect(self._on_question)
-        self._worker.answer_chunk.connect(self._on_answer_chunk)
-        self._worker.answer_ready.connect(self._on_answer)
-        self._worker.status_changed.connect(self._on_status)
-        self._worker.error_occurred.connect(lambda e: self._status_lbl.setText(f"● {e}"))
-        self._worker.finished.connect(lambda: (
-            self._start.setEnabled(True), self._stop.setEnabled(False)
-        ))
+        relay = _WorkerRelay(self, self._worker, self._generation)
+        self._worker_relay = relay
+        self._worker.question_detected.connect(relay.question, Qt.QueuedConnection)
+        self._worker.answer_chunk.connect(relay.chunk, Qt.QueuedConnection)
+        self._worker.answer_ready.connect(relay.answer, Qt.QueuedConnection)
+        self._worker.status_changed.connect(relay.status, Qt.QueuedConnection)
+        self._worker.error_occurred.connect(relay.error, Qt.QueuedConnection)
+        self._worker.finished.connect(relay.finished, Qt.QueuedConnection)
         self._worker.start()
         self._stop.setEnabled(True)
 
     def _on_stop(self):
-        if self._worker:
+        if self._cleanup_failed:
+            return
+        if self._worker is not None and not self._stopping:
+            self._generation += 1
+            self._stopping = True
             self._worker.stop()
-            self._worker = None
-        self._start.setEnabled(True)
+        self._start.setEnabled(self._worker is None and not self._quit_close)
         self._stop.setEnabled(False)
         self._status_lbl.setText(self._stt_badge())
         self._answer_area.setHtml(self._welcome_html())
         self._has_content = False
+        self._got_chunks = False
+        self._answer_start = None
+        self._answer_pending = False
+
+    def _on_worker_finished(self, worker):
+        if self._worker is not worker:
+            return
+        if getattr(worker, "cleanup_complete", False) is not True:
+            self._cleanup_failed = True
+            self._generation += 1
+            self._stopping = True
+            self._start.setEnabled(False)
+            self._stop.setEnabled(False)
+            self._on_error("Очистка ресурсов не завершена; перезапуск и выход заблокированы.")
+            return
+        self._cleanup_failed = False
+        self._worker = None
+        self._stopping = False
+        if self._worker_relay is not None:
+            self._worker_relay.deleteLater()
+            self._worker_relay = None
+        self._start.setEnabled(not self._quit_close)
+        self._stop.setEnabled(False)
+        if self._quit_close:
+            self._finish_close()
 
     # ── pipeline signal handlers ──
 
@@ -385,6 +514,7 @@ class OverlayWindow(QWidget):
         self._append_answer(f"Q: {text}", color=TEXT_2)
         self._begin_answer_block()           # empty paragraph for live streaming
         self._got_chunks = False
+        self._answer_pending = True
 
     def _begin_answer_block(self):
         if not self._has_content:
@@ -394,10 +524,13 @@ class OverlayWindow(QWidget):
         cur.movePosition(_CURSOR_END)
         if self._answer_area.toPlainText().strip():
             cur.insertBlock()
+        self._answer_start = cur.position()
         self._answer_area.setTextCursor(cur)
 
     def _on_answer_chunk(self, text):
         """A streamed token — append inline so the answer types out live."""
+        if not self._answer_pending:
+            return
         self._got_chunks = True
         cur = self._answer_area.textCursor()
         cur.movePosition(_CURSOR_END)
@@ -408,11 +541,33 @@ class OverlayWindow(QWidget):
         self._answer_area.ensureCursorVisible()
 
     def _on_answer(self, text):
-        if not self._got_chunks:             # non-streaming provider → show full text
-            self._append_answer(text, color=TEXT)
+        if not self._answer_pending:
+            return
+        self._replace_answer(text, TEXT)
+        self._answer_pending = False
         self._status_lbl.setText(f"● Ответ · {time.strftime('%H:%M')}")
         self._history.append(text)
         self.raise_()
+
+    def _on_error(self, text):
+        if self._answer_pending:
+            self._replace_answer(text, RED)
+        else:
+            self._append_answer(text, color=RED)
+        self._answer_pending = False
+        self._status_lbl.setText(f"● {text}")
+
+    def _replace_answer(self, text, color):
+        """Replace the provisional answer with its authoritative final outcome."""
+        cur = self._answer_area.textCursor()
+        cur.setPosition(self._answer_start)
+        cur.movePosition(_CURSOR_END, QTextCursor.MoveMode.KeepAnchor)
+        fmt = QTextCharFormat()
+        fmt.setForeground(QColor(color))
+        cur.insertText(text, fmt)
+        self._answer_area.setTextCursor(cur)
+        self._answer_area.ensureCursorVisible()
+        self._answer_start = None
 
     def _append_answer(self, text, color=TEXT):
         if not self._has_content:            # drop the welcome placeholder
@@ -422,7 +577,9 @@ class OverlayWindow(QWidget):
         cur.movePosition(_CURSOR_END)
         if self._answer_area.toPlainText().strip():
             cur.insertBlock()                # force a new paragraph (real line break)
-        cur.insertHtml(f'<span style="color:{color};line-height:1.4;">{text}</span>')
+        fmt = QTextCharFormat()
+        fmt.setForeground(QColor(color))
+        cur.insertText(text, fmt)
         self._answer_area.setTextCursor(cur)
         self._answer_area.ensureCursorVisible()
 
@@ -452,13 +609,13 @@ class OverlayWindow(QWidget):
     # ── backward compat ──
 
     def show_answer(self, text):
+        if not self._answer_pending:
+            self._begin_answer_block()
+            self._answer_pending = True
         self._on_answer(text)
 
     def force_hide(self):
-        self._quit_close = True
-        if self._tray:
-            self._tray.dispose()
-        self.close()
+        self._quit()
 
     # ── drag & resize ──
     _drag_pos = None

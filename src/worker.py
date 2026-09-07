@@ -38,6 +38,11 @@ class PipelineWorker(QThread):
         self._grabber: Optional[ScreenGrabber] = None
         self._session: Optional[LLMSession] = None
         self._stop_event = threading.Event()
+        # QThread.finished means run() returned, not that resource cleanup worked.
+        self.cleanup_complete = False
+        # Audio callbacks can arrive from different threads. One answer owns the
+        # streaming UI at a time, and cleanup waits for that callback to unwind.
+        self._question_lock = threading.Lock()
 
     # ------------------------------------------------------------------
     # thread lifecycle
@@ -45,78 +50,92 @@ class PipelineWorker(QThread):
 
     def run(self) -> None:
         """Main thread function — starts audio capture and event loop."""
-        self._stop_event.clear()
-        ss_cfg = self._cfg["screenshot"]
+        # A worker is single-use. Stop may arrive before QThread enters run();
+        # clearing the event here would erase that cancellation.
+        try:
+            if self._stop_event.is_set():
+                return
+            ss_cfg = self._cfg.get("screenshot", {})
+            if ss_cfg.get("enabled", True):
+                self._grabber = ScreenGrabber(
+                    output_path=str(PROJECT_ROOT / ss_cfg.get("path", "temp_screen.png")),
+                    monitor_idx=ss_cfg.get("monitor", 0),
+                    hash_threshold=ss_cfg.get("hash_threshold", 5),
+                )
+            if self._stop_event.is_set():
+                return
 
-        # screen grabber
-        self._grabber = ScreenGrabber(
-            output_path=str(PROJECT_ROOT / ss_cfg["path"]),
-            monitor_idx=ss_cfg["monitor"],
-            hash_threshold=ss_cfg["hash_threshold"],
-        )
+            be_cfg = self._cfg.get("backend", {})
+            self._session = LLMSession(
+                provider=be_cfg.get("provider", "claude"),
+                model=be_cfg.get("model", "sonnet"),
+                workdir=str(be_cfg.get("workdir", str(PROJECT_ROOT))),
+                startup_timeout=be_cfg.get("startup_timeout", 15),
+                response_timeout=be_cfg.get("response_timeout", 60),
+                command=be_cfg.get("command"),
+                codex_provider_spec=be_cfg.get("codex_provider_spec"),
+            )
+            if self._stop_event.is_set():
+                return
+            started = self._session.start()
+            if self._stop_event.is_set():
+                return
+            if not started and self._session.mode == "configuration-error":
+                self.error_occurred.emit(self._session.startup_error or "LLM configuration error")
+                return
 
-        # LLM backend config
-        be_cfg = self._cfg.get("backend", {})
-        provider = be_cfg.get("provider", "claude")
-        model = be_cfg.get("model", "sonnet")
-        workdir = be_cfg.get("workdir", str(PROJECT_ROOT))
-        timeout = be_cfg.get("response_timeout", 60)
-
-        # LLM session
-        self._session = LLMSession(
-            provider=provider,
-            model=model,
-            workdir=str(workdir),
-            startup_timeout=be_cfg.get("startup_timeout", 15),
-            response_timeout=timeout,
-            command=be_cfg.get("command"),
-        )
-        ok = self._session.start()
-        label = f"{provider}/{model}" if ok else f"{provider}/mock"
-        self.status_changed.emit(f"listening ({label})")
-
-        # Pre-warm the LLM CLI in the background so the FIRST real question
-        # doesn't eat the cold-start latency (~5-7s → hidden at startup).
-        if ok:
-            def _warm():
-                try:
-                    self._session.ask("привет")
-                    logger.info("LLM pre-warmed")
-                except Exception as e:
-                    logger.debug(f"LLM warmup skipped: {e}")
-            threading.Thread(target=_warm, daemon=True, name="llm-warmup").start()
-
-        # audio capture — calls on_question from its internal thread
-        self._audio = AudioCapture(
-            on_question=self._on_question,
-            whisper_model=be_cfg.get("whisper_model", "base"),
-            stt_backend=be_cfg.get("stt_backend", "faster-whisper"),
-            language=be_cfg.get("language", "ru"),
-            output_dir=str(PROJECT_ROOT),
-        )
-
-        if not self._audio.start():
-            self.error_occurred.emit("Audio capture failed — no loopback device")
-            return
-
-        self.status_changed.emit("listening")
-
-        # keep thread alive until stop() is called
-        while not self._stop_event.is_set():
-            self._stop_event.wait(0.5)
-
-        # cleanup
-        self._audio.stop()
-        self._grabber.close()
-        self._session.close()
-        logger.info("Worker stopped")
+            # Audio owns its callback thread; no hidden model warmup runs in
+            # parallel with questions or survives the session cancellation.
+            self._audio = AudioCapture(
+                on_question=self._on_question,
+                on_error=self._on_audio_error,
+                stop_event=self._stop_event,
+                whisper_model=be_cfg.get("whisper_model", "base"),
+                stt_backend=be_cfg.get("stt_backend", "faster-whisper"),
+                language=be_cfg.get("language", "ru"),
+                output_dir=str(PROJECT_ROOT),
+            )
+            if self._stop_event.is_set():
+                return
+            if not self._audio.start():
+                if not self._stop_event.is_set():
+                    self.error_occurred.emit("Audio capture failed — no loopback device")
+                return
+            if not self._stop_event.is_set():
+                self.status_changed.emit("listening")
+            self._stop_event.wait()
+        except Exception as error:
+            logger.error("Worker startup failed: %s", type(error).__name__)
+            if not self._stop_event.is_set():
+                self.error_occurred.emit(f"[error: {type(error).__name__}]")
+        finally:
+            self._stop_event.set()
+            cleanup_complete = True
+            # Cancel/reap the LLM before AudioCapture.stop() can wait for an
+            # audio callback currently blocked in the model request.
+            for resource, method in ((self._session, "close"), (self._audio, "stop")):
+                if resource is not None:
+                    try:
+                        getattr(resource, method)()
+                    except Exception as error:
+                        cleanup_complete = False
+                        logger.error("Worker cleanup failed: %s", type(error).__name__)
+            with self._question_lock:
+                if self._grabber is not None:
+                    try:
+                        self._grabber.close()
+                    except Exception as error:
+                        cleanup_complete = False
+                        logger.error("Screen cleanup failed: %s", type(error).__name__)
+            self.cleanup_complete = cleanup_complete
+            if cleanup_complete:
+                logger.info("Worker stopped")
+            else:
+                logger.error("Worker cleanup incomplete; resources retained")
 
     def stop(self) -> None:
-        """Request graceful stop."""
+        """Request stop without blocking the GUI on audio, processes or QThread."""
         self._stop_event.set()
-        if self._audio:
-            self._audio.stop()
-        self.wait(timeout=3000)
 
     # ------------------------------------------------------------------
     # pipeline
@@ -126,8 +145,20 @@ class PipelineWorker(QThread):
         """Called from audio thread when STT produces text."""
         if self._stop_event.is_set():
             return
+        with self._question_lock:
+            if self._stop_event.is_set():
+                return
+            self._process_question(question_text)
 
-        logger.info(f"→ Question: «{question_text}»")
+    def _emit_chunk(self, chunk: str) -> None:
+        if not self._stop_event.is_set():
+            self.answer_chunk.emit(chunk)
+
+    def _on_audio_error(self, message: str) -> None:
+        if not self._stop_event.is_set():
+            self.error_occurred.emit(message)
+
+    def _process_question(self, question_text: str) -> None:
         self.question_detected.emit(question_text)
 
         # screenshot (configurable, parallel if enabled)
@@ -136,24 +167,37 @@ class PipelineWorker(QThread):
         if use_screenshot and self._grabber:
             try:
                 ss_path = self._grabber.grab_force()
-                logger.info(f"Screenshot: {ss_path}")
-            except Exception as e:
-                logger.warning(f"Screenshot failed: {e}")
+            except Exception as error:
+                logger.warning("Screenshot failed: %s", type(error).__name__)
+
+        if self._stop_event.is_set():
+            return
 
         # ask LLM with streaming
         self.status_changed.emit("processing")
         try:
             answer = self._session.ask_stream(
                 question_text,
-                on_chunk=lambda chunk: self.answer_chunk.emit(chunk),
+                on_chunk=self._emit_chunk,
                 screenshot_path=str(ss_path) if ss_path else None,
             )
-            if not answer or answer.startswith("[MOCK"):
-                answer = f"[{self._session.provider} offline] Q: {question_text}"
-        except Exception as e:
-            logger.error(f"LLM request failed: {e}")
-            answer = f"[error: {type(e).__name__}]"
+        except Exception as error:
+            logger.error("LLM request failed: %s", type(error).__name__)
+            if not self._stop_event.is_set():
+                self.error_occurred.emit(f"[error: {type(error).__name__}]")
+            return
 
-        logger.info(f"← Answer: «{answer[:100]}»")
-        self.answer_ready.emit(answer)
-        self.status_changed.emit("listening")
+        if self._stop_event.is_set():
+            return
+        # str-compatible results carry their outcome per request. A successful
+        # literal '[timeout]' remains an answer, not a guessed failure marker.
+        status = getattr(answer, "status", "success")
+        if status == "mock":
+            self.error_occurred.emit(f"[{self._session.provider} offline]")
+        elif status != "success":
+            self.error_occurred.emit(str(answer))
+        elif not answer:
+            self.error_occurred.emit(f"[{self._session.provider} failed: no output]")
+        else:
+            self.answer_ready.emit(str(answer))
+            self.status_changed.emit("listening")

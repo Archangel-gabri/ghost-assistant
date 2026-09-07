@@ -390,6 +390,10 @@ def create_stt(backend: str = "auto", **kwargs) -> STTBackend:
 
     if backend == "groq":
         return GroqSTT()
+    if backend in {"moonshine", "distil-whisper"}:
+        # Capture passes its common Whisper size, while these two backends use
+        # a fixed model and expose no model_size constructor argument.
+        kwargs.pop("model_size", None)
     return backend_cls(**kwargs)
 
 

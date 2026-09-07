@@ -21,10 +21,10 @@ source .venv/bin/activate
 python -m pip install -r requirements.txt -r requirements-dev.txt
 ```
 
-Run the existing smoke suite and lint checks before changing anything:
+Run the existing regression suite and lint checks before changing anything:
 
 ```bash
-python -m pytest -q tests
+QT_QPA_PLATFORM=offscreen python -m pytest -q tests
 python -m ruff check src tests
 ```
 
@@ -53,7 +53,7 @@ Avoid reformatting unrelated files as part of a focused contribution.
 4. Re-run the checks:
 
    ```bash
-   python -m pytest -q tests
+   QT_QPA_PLATFORM=offscreen python -m pytest -q tests
    python -m ruff check src tests
    ```
 
@@ -90,7 +90,7 @@ src/                    flat application modules
 ├── utils.py              shared helpers and tool-registry loading
 └── tools.yaml            user-editable tool registry
 
-tests/                  smoke and documentation-contract tests
+tests/                  smoke, CLI lifecycle, worker and queued Qt regression tests
 docs/                   architecture notes
 assets/                 application icons
 install.sh              desktop installation script
@@ -102,14 +102,15 @@ ruff.toml               repository lint policy
 
 ## Testing Guidelines
 
-- Exercise the smallest relevant test first, then run the full smoke suite.
-- Mock microphones, screen capture, subprocess tools, and external services in automated tests.
+- Exercise the smallest relevant test first, then run the full regression suite.
+- Use controlled fakes for microphones, screen capture and external services. Transport tests
+  should launch the local fake CLI as a real subprocess to exercise pipes and cleanup.
 - Do not require API keys or a running Claude/Codex process for the default test suite.
 - Preserve existing regression coverage when refactoring.
 
-The current suite is intentionally smoke-level. Broader GUI, audio-device, speech-model, and live
-AI-provider behavior needs explicit integration or manual testing and should be reported separately
-from the default test result.
+The suite includes real subprocess and offscreen Qt-queue regressions, but not live audio-device,
+speech-model or AI-provider validation. Report those separately from the default test result.
+Current acceptance limits and the local environment command are recorded in [CLAUDE.md](CLAUDE.md).
 
 ## Areas for Contribution
 

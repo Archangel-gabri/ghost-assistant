@@ -65,7 +65,8 @@ def get_nested(d: dict, *keys: str, default: Any = None) -> Any:
 _BUILTIN_TOOLS = [
     {"id": "claude", "label": "Claude Code", "provider": "claude",
      "models": ["sonnet", "haiku", "opus", "fable"]},
-    {"id": "codex", "label": "Codex", "provider": "codex",
+    {"id": "codex", "label": "Codex (OpenAI)", "provider": "codex",
+     "codex_provider_spec": {"name": "openai"},
      "models": ["gpt-5.6-luna", "gpt-5.6-sol", "o3", "gpt-5.5"]},
 ]
 

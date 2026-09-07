@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  offline-checks:
+    name: Offline regression tests and Ruff
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      QT_QPA_PLATFORM: offscreen
+      PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
+      # The default suite uses synthetic subprocess/STT backends and offscreen Qt.
+      # Do not opt into installed CLI probes or supply model/service credentials.
+      GHOST_NATIVE_CODEX_CONFIG: "0"
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14.5"
+
+      - name: Install the minimal offline test dependencies
+        # Full runtime requirements include audio hardware and speech-model engines.
+        # Essentials provides QtCore/Gui/Widgets/Svg without the unused Qt Addons.
+        run: |
+          python -m pip install --disable-pip-version-check --only-binary=:all: \
+            pytest==8.4.2 ruff==0.15.13 \
+            PySide6-Essentials==6.11.1 numpy==2.3.5 PyYAML==6.0.3 \
+            Pillow==12.2.0 ImageHash==4.3.2 mss==10.2.0
+
+      - name: Run offline regression tests
+        run: python -m pytest -q tests --tb=short
+
+      - name: Lint application and tests
+        run: python -m ruff check src tests

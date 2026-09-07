@@ -5,8 +5,8 @@ Pipeline:
   PipeWire/PulseAudio monitor source
   → sounddevice InputStream (16kHz mono)
   → energy-based VAD (RMS threshold, seamless switching to Silero when available)
-  → silence gap > 1.0s triggers save to temp_question.wav
-  → faster-whisper (tiny) transcribes to text
+  → silence gap > 1.0s triggers an owned, unique temporary WAV
+  → a persistent, cancellable STT child transcribes to text
   → result emitted via callback
 
 Dependencies:
@@ -19,6 +19,7 @@ import collections
 import importlib
 import logging
 import subprocess
+import tempfile
 import threading
 import time
 import wave
@@ -218,7 +219,9 @@ class AudioCapture:
                  whisper_model: str = "base",
                  stt_backend: str = "faster-whisper",
                  language: Optional[str] = "ru",
-                 output_dir: Optional[str] = None):
+                 output_dir: Optional[str] = None,
+                 on_error: Optional[Callable[[str], None]] = None,
+                 stop_event: Optional[threading.Event] = None):
         """
         Args:
             on_question: callback(text) when a question is transcribed.
@@ -228,13 +231,20 @@ class AudioCapture:
             stt_backend: "faster-whisper" (RU+EN), "streaming", "auto".
                          NOTE: "moonshine"/"distil-whisper" are English-only.
             language: force STT language ("ru", "en", ...); None = auto-detect (slower).
-            output_dir: where to save temp_question.wav (default: cwd).
+            output_dir: directory for owned temporary WAV files (default: cwd).
+            on_error: reports capture/STT failures without treating them as questions.
+            stop_event: optional shared terminal cancellation event.
         """
         self._callback = on_question
+        self._error_callback = on_error
+        self._stop_event = stop_event if stop_event is not None else threading.Event()
+        self._lifecycle_lock = threading.RLock()
+        self._transcription_lock = threading.Lock()
+        self._pending_wavs: set[Path] = set()
         self._device_name = device_name
         self._output_dir = Path(output_dir) if output_dir else Path.cwd()
         self._vad = _make_vad(prefer_silero)
-        self._stt = None  # lazy load via stt_fast
+        self._stt = None  # lazy child owns the backend/model
         self._stt_backend = stt_backend
         self._whisper_model = whisper_model
         self._language = language
@@ -259,7 +269,23 @@ class AudioCapture:
 
     def start(self) -> bool:
         """Start capturing. Auto-selects sounddevice or parec backend. Returns True on success."""
+        with self._lifecycle_lock:
+            if self._stop_event.is_set():
+                return False
+            if self._stream is not None or self._parec_proc is not None:
+                return self._running
+            try:
+                return self._start_capture()
+            except Exception as error:
+                logger.error("Audio startup failed: %s", type(error).__name__)
+                self._report_error(f"[audio startup error: {type(error).__name__}]")
+                self.stop()
+                return False
+
+    def _start_capture(self) -> bool:
         resolved = self._resolve_source()
+        if self._stop_event.is_set():
+            return False
         if resolved is None:
             sd = _load_sounddevice()
             logger.error("No loopback audio source found")
@@ -269,6 +295,7 @@ class AudioCapture:
                     logger.error(f"  [{d['index']}] {d['name']}")
             logger.error("PulseAudio monitor sources:")
             AudioCapture._list_pa_sources()
+            self._running = False
             return False
 
         backend, source_id = resolved
@@ -288,42 +315,114 @@ class AudioCapture:
                 blocksize=BLOCK_SIZE,
                 callback=self._audio_callback_sd,
             )
+            if self._stop_event.is_set():
+                self.stop()
+                return False
             self._stream.start()
 
         elif backend == "parec":
             source_name = source_id
             logger.info(f"Backend: parec | Source: {source_name}")
-            self._start_parec_reader(source_name)
+            if not self._start_parec_reader(source_name):
+                self._running = False
+                return False
+
+        if self._stop_event.is_set():
+            self.stop()
+            return False
 
         logger.info("Audio capture started")
         return True
 
     def stop(self) -> None:
-        """Stop capturing and clean up resources."""
+        """Terminal stop: cancel owned STT before waiting for capture callbacks."""
+        self._stop_event.set()
         self._running = False
-
-        if self._stream:
+        failures = []
+        stt_closed = True
+        if self._stt is not None:
             try:
-                self._stream.stop()
-                self._stream.close()
-            except Exception:
-                pass
+                self._stt.close()
+            except Exception as error:
+                stt_closed = False
+                failures.append(error)
+                logger.error("STT cleanup failed: %s", type(error).__name__)
+
+        # Detach handles atomically. A second Stop must not close a new or
+        # already-closing handle while the first Stop waits outside this lock.
+        with self._lifecycle_lock:
+            stream, proc, reader = self._stream, self._parec_proc, self._parec_thread
             self._stream = None
-
-        if self._parec_proc:
+            self._parec_proc = None
+            self._parec_thread = None
+        if stream is not None:
             try:
-                self._parec_proc.terminate()
-                self._parec_proc.wait(timeout=2)
+                stream.stop()
+            except Exception as error:
+                logger.warning("Audio stream stop failed: %s", type(error).__name__)
+            finally:
+                try:
+                    stream.close()
+                except Exception as error:
+                    failures.append(error)
+                    with self._lifecycle_lock:
+                        self._stream = stream
+
+        if proc is not None:
+            try:
+                if proc.poll() is None:
+                    proc.terminate()
+                proc.wait(timeout=1)
             except Exception:
                 try:
-                    self._parec_proc.kill()
-                except Exception:
-                    pass
-            self._parec_proc = None
+                    proc.kill()
+                    proc.wait(timeout=1)
+                except Exception as error:
+                    failures.append(error)
+            try:
+                proc_exited = proc.poll() is not None
+            except Exception as error:
+                failures.append(error)
+                proc_exited = False
+            retain_proc = not proc_exited
+            if not proc_exited:
+                failures.append(RuntimeError("audio process cleanup incomplete"))
+            else:
+                for pipe in (proc.stdout, proc.stderr):
+                    if pipe is not None:
+                        try:
+                            pipe.close()
+                        except Exception as error:
+                            failures.append(error)
+                            retain_proc = True
+            if retain_proc:
+                with self._lifecycle_lock:
+                    self._parec_proc = proc
 
-        if self._parec_thread and self._parec_thread.is_alive():
-            self._parec_thread.join(timeout=2)
-        self._parec_thread = None
+        if reader is not None and reader is not threading.current_thread() and reader.is_alive():
+            reader.join(timeout=2)
+            if reader.is_alive():
+                with self._lifecycle_lock:
+                    self._parec_thread = reader
+                failures.append(RuntimeError("audio reader cleanup incomplete"))
+
+        # Reader shutdown may register a WAV after its first failed child close.
+        # Reap the child and finish callbacks before collecting deferred paths.
+        with self._lifecycle_lock:
+            pending_wavs = tuple(self._pending_wavs) if stt_closed else ()
+        for wav_path in pending_wavs:
+            try:
+                wav_path.unlink(missing_ok=True)
+                with self._lifecycle_lock:
+                    self._pending_wavs.discard(wav_path)
+            except OSError as error:
+                failures.append(error)
+
+        self._audio_buffer.clear()
+        self._speech_active = False
+        self._speech_start = self._silence_start = None
+        if failures:
+            raise RuntimeError("audio cleanup incomplete") from None
 
         logger.info("Audio capture stopped")
 
@@ -332,6 +431,14 @@ class AudioCapture:
         return self._running
 
     # ---- internals ----
+
+    def _report_error(self, message: str) -> None:
+        if self._stop_event.is_set() or self._error_callback is None:
+            return
+        try:
+            self._error_callback(message)
+        except Exception as error:
+            logger.error("Audio error callback failed: %s", type(error).__name__)
 
     def _resolve_source(self) -> Optional[tuple[str, object]]:
         """Return (backend_type, source_id) or None.
@@ -436,7 +543,11 @@ class AudioCapture:
 
     def _process_audio_chunk(self, chunk: np.ndarray, now: float) -> None:
         """VAD + buffer management for a single audio block."""
+        if self._stop_event.is_set() or not self._running:
+            return
         speech = self._vad.is_speech(chunk)
+        if self._stop_event.is_set() or not self._running:
+            return
 
         if speech:
             self._audio_buffer.append((now, chunk))
@@ -474,7 +585,7 @@ class AudioCapture:
     def _audio_callback_sd(self, indata: np.ndarray, frames: int,
                            _time_info, _status) -> None:
         """Called from sounddevice's internal thread for each audio block."""
-        if not self._running:
+        if self._stop_event.is_set() or not self._running:
             return
         chunk = indata[:, 0].copy() if indata.ndim > 1 else indata.copy()
         self._process_audio_chunk(chunk, time.time())
@@ -483,7 +594,7 @@ class AudioCapture:
     # backend: parec subprocess (for PulseAudio loopback monitors)
     # ------------------------------------------------------------------
 
-    def _start_parec_reader(self, source_name: str) -> None:
+    def _start_parec_reader(self, source_name: str) -> bool:
         """Spawn parec and read PCM from stdout in a thread."""
         try:
             self._parec_proc = subprocess.Popen(
@@ -495,22 +606,29 @@ class AudioCapture:
                     "--latency-msec=10",
                 ],
                 stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+                # No protocol uses parec stderr; an unread PIPE could block
+                # capture forever when the audio service emits diagnostics.
+                stderr=subprocess.DEVNULL,
             )
         except FileNotFoundError:
             logger.error("parec not found. Install: sudo pacman -S pulseaudio-utils")
-            return
+            return False
+
+        proc = self._parec_proc
 
         logger.info(f"parec started on source: {source_name}")
 
         bytes_per_block = BLOCK_SIZE * 4  # s16le stereo = 4 bytes/frame
 
         def _read_loop():
-            while self._running and self._parec_proc.poll() is None:
+            while not self._stop_event.is_set() and self._running and proc.poll() is None:
                 try:
-                    raw = self._parec_proc.stdout.read(bytes_per_block)
-                    if not raw or len(raw) < bytes_per_block:
-                        time.sleep(0.01)
+                    raw = proc.stdout.read(bytes_per_block)
+                    if not raw:
+                        break
+                    if self._stop_event.is_set():
+                        break
+                    if len(raw) < bytes_per_block:
                         continue
                     # s16le stereo → float32 mono [-1, 1]
                     pcm = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
@@ -520,46 +638,84 @@ class AudioCapture:
                     elif len(pcm) > BLOCK_SIZE:
                         pcm = pcm[:BLOCK_SIZE]
                     self._process_audio_chunk(pcm, time.time())
-                except Exception as e:
-                    logger.debug(f"parec read error: {e}")
+                except Exception as error:
+                    logger.debug("parec read error: %s", type(error).__name__)
                     break
 
         self._parec_thread = threading.Thread(target=_read_loop, daemon=True, name="parec-reader")
         self._parec_thread.start()
+        return True
 
     def _save_and_transcribe(self, trigger_time: float) -> None:
-        """Flush audio buffer to WAV and run STT."""
+        """One in-flight transcription, no growing queue of audio/model jobs."""
+        if self._stop_event.is_set() or not self._running:
+            return
+        if not self._transcription_lock.acquire(blocking=False):
+            return
+        try:
+            self._transcribe_buffer()
+        finally:
+            self._transcription_lock.release()
+
+    def _transcribe_buffer(self) -> None:
+        if self._stop_event.is_set() or not self._running:
+            return
         if len(self._audio_buffer) < 3:  # too short, skip
             logger.debug("Audio buffer too short, skipping")
             self._audio_buffer.clear()
             return
 
         # collect audio from buffer
-        chunks = []
-        for _ts, chunk in self._audio_buffer:
-            chunks.append(chunk)
+        buffered = list(self._audio_buffer)
+        chunks = [chunk for _ts, chunk in buffered]
         audio = np.concatenate(chunks)
         self._audio_buffer.clear()
-
-        # save WAV
-        wav_path = self._output_dir / TEMP_QUESTION_WAV
-        self._save_wav(str(wav_path), audio, SAMPLE_RATE)
-
-        # transcribe with auto-selected or specified backend
+        wav_path = None
+        cleanup_incomplete = False
         try:
+            if self._stop_event.is_set():
+                return
+            # Each request owns a unique path until STT finishes or is reaped.
+            # Stop/restart must never overwrite a WAV still read by an old child.
+            with tempfile.NamedTemporaryFile(
+                prefix="ghost-question-", suffix=".wav", dir=self._output_dir, delete=False
+            ) as wav_file:
+                wav_path = Path(wav_file.name)
+            self._save_wav(str(wav_path), audio, SAMPLE_RATE)
+            if self._stop_event.is_set():
+                return
             if self._stt is None:
-                from stt_fast import create_stt
-                self._stt = create_stt(self._stt_backend, model_size=self._whisper_model)
+                from stt_process import STTProcess
+                self._stt = STTProcess(
+                    backend=self._stt_backend, model_size=self._whisper_model,
+                    stop_event=self._stop_event,
+                )
             text = self._stt.transcribe(str(wav_path), language=self._language)
-            if text:
+            if text and not self._stop_event.is_set() and self._running:
                 self._callback(text)
-        except ImportError as e:
-            logger.warning(f"STT dependencies missing: {e}")
-            logger.info("Install: pip install faster-whisper transformers torch")
-            self._callback("[STT not available — install requirements]")
-        except Exception as e:
-            logger.error(f"STT error: {type(e).__name__}: {e}")
-            self._callback(f"[STT error: {type(e).__name__}]")
+        except Exception as error:
+            cleanup_incomplete = getattr(error, "cleanup_incomplete", False)
+            if cleanup_incomplete and wav_path is not None:
+                with self._lifecycle_lock:
+                    self._pending_wavs.add(wav_path)
+            if not self._stop_event.is_set() and self._running:
+                logger.error("STT failed: %s", type(error).__name__)
+                self._report_error(f"[STT error: {type(error).__name__}]")
+            if cleanup_incomplete:
+                self._stop_event.set()
+                self._running = False
+        finally:
+            # Never remove input potentially still read by a child whose cleanup
+            # failed. It was registered before cancellation wakes a stop retry.
+            if wav_path is not None and not cleanup_incomplete:
+                try:
+                    wav_path.unlink(missing_ok=True)
+                except OSError:
+                    with self._lifecycle_lock:
+                        self._pending_wavs.add(wav_path)
+                    self._report_error("[audio cleanup incomplete]")
+                    self._stop_event.set()
+                    self._running = False
 
     @staticmethod
     def _save_wav(path: str, audio: np.ndarray, sample_rate: int) -> None:

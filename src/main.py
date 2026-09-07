@@ -10,6 +10,7 @@ Usage:
 """
 
 import argparse
+from contextlib import contextmanager
 import logging
 import os
 import sys
@@ -66,51 +67,58 @@ def run_gui(cfg: dict) -> int:
 # CLI fallback
 # ---------------------------------------------------------------------------
 
-def run_cli(cfg: dict) -> None:
-    """Legacy terminal mode (kept for debugging)."""
+@contextmanager
+def _cli_resources(cfg: dict):
+    """Check LLM configuration before optional capture; always release resources."""
     from config_helper import ConfigBuilder
 
     builder = ConfigBuilder(cfg)
-    grabber = builder.create_screen_grabber()
     session = builder.create_llm_session()
-    session.start()
-    log.info(f"LLM: {session.provider}/{session.model} ({session.mode})")
-
-    print("═" * 48)
-    print("  Ghost — terminal mode")
-    print(f"  LLM: {session.provider}/{session.model} ({session.mode})")
-    print("  Type question, Enter to send, Ctrl+C to exit")
-    print("═" * 48)
-
+    grabber = None
     try:
-        while True:
-            question = input("❯❯ ").strip()
-            if not question:
-                continue
-            if question.lower() in ("q", "quit", "exit", "выход"):
-                break
-            ss_path = grabber.grab_force()
-            answer = session.ask(question, screenshot_path=str(ss_path))
-            print(f"\n  {answer}\n")
-    except KeyboardInterrupt:
-        print()
+        if not session.start() and session.mode == "configuration-error":
+            raise ValueError(session.startup_error or "LLM configuration error")
+        if cfg.get("screenshot", {}).get("enabled", True):
+            grabber = builder.create_screen_grabber()
+        yield session, grabber
     finally:
-        grabber.close()
-        session.close()
+        try:
+            if grabber is not None:
+                grabber.close()
+        finally:
+            session.close()
+
+
+def run_cli(cfg: dict) -> None:
+    """Legacy terminal mode (kept for debugging)."""
+    with _cli_resources(cfg) as (session, grabber):
+        log.info(f"LLM: {session.provider}/{session.model} ({session.mode})")
+
+        print("═" * 48)
+        print("  Ghost — terminal mode")
+        print(f"  LLM: {session.provider}/{session.model} ({session.mode})")
+        print("  Type question, Enter to send, Ctrl+C to exit")
+        print("═" * 48)
+
+        try:
+            while True:
+                question = input("❯❯ ").strip()
+                if not question:
+                    continue
+                if question.lower() in ("q", "quit", "exit", "выход"):
+                    break
+                ss_path = str(grabber.grab_force()) if grabber is not None else None
+                answer = session.ask(question, screenshot_path=ss_path)
+                print(f"\n  {answer}\n")
+        except KeyboardInterrupt:
+            print()
 
 
 def run_once_cli(cfg: dict, question: str) -> None:
-    from config_helper import ConfigBuilder
-
-    builder = ConfigBuilder(cfg)
-    grabber = builder.create_screen_grabber()
-    session = builder.create_llm_session()
-    session.start()
-    ss_path = grabber.grab_force()
-    answer = session.ask(question, screenshot_path=str(ss_path))
-    print(answer)
-    grabber.close()
-    session.close()
+    with _cli_resources(cfg) as (session, grabber):
+        ss_path = str(grabber.grab_force()) if grabber is not None else None
+        answer = session.ask(question, screenshot_path=ss_path)
+        print(answer)
 
 
 # ---------------------------------------------------------------------------

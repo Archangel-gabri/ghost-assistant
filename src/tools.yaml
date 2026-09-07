@@ -19,9 +19,22 @@ tools:
     models: [sonnet, haiku, opus, fable]
 
   - id: codex
-    label: "Codex"
+    label: "Codex (OpenAI)"
     provider: codex
+    codex_provider_spec: {name: openai}
     models: [gpt-5.6-luna, gpt-5.6-sol, o3, gpt-5.5]
+
+  # Custom Codex providers must be selected explicitly, never imported from
+  # ~/.codex/config.toml. Store only metadata here, not credential values.
+  # - id: codex-proxy
+  #   label: "Codex (my proxy)"
+  #   provider: codex
+  #   codex_provider_spec:
+  #     name: my_proxy
+  #     base_url: "https://your-provider.example/v1"
+  #     wire_api: responses
+  #     env_key: MY_LLM_API_KEY
+  #   models: [your-model]
 
   # --- examples: uncomment & set API keys to enable ---
   # - id: grok

@@ -31,6 +31,7 @@ class ConfigBuilder:
             "workdir": be_cfg.get("workdir", str(self.project_root)),
             "startup_timeout": be_cfg.get("startup_timeout", 15),
             "response_timeout": be_cfg.get("response_timeout", 60),
+            "codex_provider_spec": be_cfg.get("codex_provider_spec"),
         }
 
     def create_screen_grabber(self) -> ScreenGrabber:
@@ -51,6 +52,7 @@ class ConfigBuilder:
             workdir=be["workdir"],
             startup_timeout=be["startup_timeout"],
             response_timeout=be["response_timeout"],
+            codex_provider_spec=be["codex_provider_spec"],
         )
 
     def create_audio_capture(
