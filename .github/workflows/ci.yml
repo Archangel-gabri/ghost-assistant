@@ -35,6 +35,13 @@ jobs:
         with:
           python-version: "3.14.5"
 
+      - name: Install system libraries required by offscreen Qt
+        # Offscreen avoids a display server, not QtGui's ELF dependencies.
+        # Hosted Ubuntu lacks libEGL.so.1 even when the Python wheels install.
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends libegl1 libopengl0
+
       - name: Install the minimal offline test dependencies
         # Full runtime requirements include audio hardware and speech-model engines.
         # Essentials provides QtCore/Gui/Widgets/Svg without the unused Qt Addons.
@@ -43,6 +50,9 @@ jobs:
             pytest==8.4.2 ruff==0.15.13 \
             PySide6-Essentials==6.11.1 numpy==2.3.5 PyYAML==6.0.3 \
             Pillow==12.2.0 ImageHash==4.3.2 mss==10.2.0
+
+      - name: Verify the actual offscreen Qt runtime
+        run: python -c "from PySide6.QtWidgets import QApplication; app = QApplication([]); print('offscreen Qt ready')"
 
       - name: Run offline regression tests
         run: python -m pytest -q tests --tb=short
