@@ -137,3 +137,6 @@ temp_question.wav
 *.mp3
 .ghost_cache/
 config.local.yaml
+
+# workspace metadata — local only
+.proeb/
