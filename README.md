@@ -70,9 +70,10 @@ and desktop shortcut.
   live provider access, or every desktop capture setup.
 
 Dated test results, compatibility pins, and native-check evidence are kept in
-[`docs/STATUS.md`](docs/STATUS.md). Contributor commands are in
-[`CONTRIBUTING.md`](CONTRIBUTING.md).
+[`docs/STATUS.md`](docs/STATUS.md).
 
 ## License
 
 [MIT](LICENSE)
+
+Contributions are welcome; see [CONTRIBUTING.md](CONTRIBUTING.md).

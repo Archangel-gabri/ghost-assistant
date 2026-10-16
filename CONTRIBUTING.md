@@ -1,129 +1,66 @@
-# Contributing to Ghost — voice + screen assistant
+# Contributing to Ghost
 
-Thank you for helping improve Ghost. Keep changes focused, include tests where they add useful
-coverage, and update documentation when behavior or setup changes.
+Thank you for helping improve Ghost. Keep changes focused, preserve existing behavior unless an
+issue says otherwise, and add regression coverage for bug fixes.
 
-## Code of Conduct
+## Start with an Issue
 
-Be respectful, inclusive, and constructive.
+Search the [issue tracker](https://github.com/Archangel-gabri/ghost-assistant/issues) first. Open
+an issue for a bug or proposal so its UI, process-lifecycle, and provider impact can be agreed.
 
-## Development Setup
+## Local Setup
 
-Ghost is a flat application source tree, not an installable Python package. Install its dependency
-sets from the requirements files rather than using an editable install:
+Ghost is a flat source tree, not an installable Python package. Install its requirements directly:
 
 ```bash
 git clone https://github.com/Archangel-gabri/ghost-assistant.git
 cd ghost-assistant
-
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install -r requirements.txt -r requirements-dev.txt
+./run.sh
 ```
 
-Run the existing regression suite and lint checks before changing anything:
+At least one supported model CLI must be installed and authenticated for live answers. Do not use
+live providers, microphones, or screen capture as part of the default regression suite.
+
+## Tests and Linting
+
+Run the offline Qt suite and Ruff from the repository root:
 
 ```bash
 QT_QPA_PLATFORM=offscreen python -m pytest -q tests
 python -m ruff check src tests
+git diff --check
 ```
 
-The repository does not currently enforce a full-tree formatting or static type-checking gate.
-Avoid reformatting unrelated files as part of a focused contribution.
+The repository does not enforce full-tree formatting or static type checking. Do not reformat
+unrelated files. Passing offline tests does not prove speech quality, live provider access, or
+desktop capture on a particular host.
 
-## Contribution Workflow
+## Code Style and Tests
 
-1. Fork the repository on GitHub and clone your fork (or clone the upstream repository shown
-   above for read-only work).
-2. Create a focused branch:
+- Follow the nearby Python and PySide6 patterns and keep the Qt main thread non-blocking.
+- Preserve bounded I/O, cancellation, process cleanup, and late-event rejection contracts.
+- Use controlled fake CLIs, STT backends, audio, and screen capture for default tests.
+- Exercise the smallest relevant test first, then run the full offline suite.
+- Update documentation when setup, configuration, or externally visible behavior changes.
 
-   ```bash
-   git switch -c feature/my-feature
-   # or
-   git switch -c fix/my-bug
-   ```
+## Propose a Change
 
-3. Make the change:
+1. Agree the scope in an issue.
+2. Create a branch such as `fix/worker-shutdown` from `master`.
+3. Make the smallest complete change and add or update tests and documentation.
+4. Run the checks above and review the complete diff.
+5. Open a pull request with the issue link, test output, and UI screenshots if relevant.
 
-   - Keep the diff focused and atomic.
-   - Follow the surrounding code style.
-   - Add regression coverage for bug fixes and useful coverage for new behavior.
-   - Update the relevant documentation.
+## Data and Secrets
 
-4. Re-run the checks:
+Do not submit recordings, screenshots with personal data, transcripts, API keys, tokens,
+credentials, provider configs, database dumps, private logs, or captured desktop contents.
 
-   ```bash
-   QT_QPA_PLATFORM=offscreen python -m pytest -q tests
-   python -m ruff check src tests
-   ```
+## Security Vulnerabilities
 
-5. Review and commit exactly the intended files:
-
-   ```bash
-   git status --short
-   git diff --check
-   git add --patch
-   git commit -m "Brief description of change"
-   ```
-
-6. Push the branch and open a pull request:
-
-   ```bash
-   git push -u origin feature/my-feature
-   ```
-
-Include a clear description, any related issue, the checks you ran, and screenshots for visible UI
-changes.
-
-## Project Structure
-
-```text
-src/                    flat application modules
-├── main.py               GUI entry point and command-line modes
-├── worker.py             background audio → STT → LLM pipeline
-├── orchestrator.py       Claude, Codex, and generic CLI adapters
-├── audio_capture.py      audio capture and voice activity detection
-├── screen_monitor.py     screenshot capture and change detection
-├── stt_fast.py           speech-to-text backends
-├── overlay_window.py     Qt overlay UI
-├── tray_icon.py          system tray UI
-├── utils.py              shared helpers and tool-registry loading
-└── tools.yaml            user-editable tool registry
-
-tests/                  smoke, CLI lifecycle, worker and queued Qt regression tests
-docs/                   architecture notes
-assets/                 application icons
-install.sh              desktop installation script
-run.sh                  run without desktop installation
-requirements.txt        runtime dependencies
-requirements-dev.txt    pytest and Ruff
-ruff.toml               repository lint policy
-```
-
-## Testing Guidelines
-
-- Exercise the smallest relevant test first, then run the full regression suite.
-- Use controlled fakes for microphones, screen capture and external services. Transport tests
-  should launch the local fake CLI as a real subprocess to exercise pipes and cleanup.
-- Do not require API keys or a running Claude/Codex process for the default test suite.
-- Preserve existing regression coverage when refactoring.
-
-The suite includes real subprocess and offscreen Qt-queue regressions, but not live audio-device,
-speech-model or AI-provider validation. Report those separately from the default test result.
-Current acceptance limits and the local environment command are recorded in [CLAUDE.md](CLAUDE.md).
-
-## Areas for Contribution
-
-- Bug fixes and regression coverage
-- UI and accessibility improvements
-- Performance and reliability
-- Documentation
-- Localization
-- New LLM or STT integrations
-
-## Questions?
-
-- Read the [project overview](README.md) and [architecture notes](docs/ARCHITECTURE.md).
-- Search or open a [GitHub issue](https://github.com/Archangel-gabri/ghost-assistant/issues).
-
-Thank you for making Ghost better.
+Do not open a public issue for a suspected vulnerability. Use GitHub Security's
+[Report a vulnerability](https://github.com/Archangel-gabri/ghost-assistant/security/advisories/new)
+form and include safe reproduction steps without secrets or personal data.
